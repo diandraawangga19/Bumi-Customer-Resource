@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bumi Customer Resource (BCR)</title>
+<style>
+  :root{
+    --bg:#0b0f19; --panel:#111827; --border:#1f2937; --text:#e5e7eb; --muted:#9ca3af; --accent:#22d3ee;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+  }
+  .wrap{max-width:980px;margin:0 auto;padding:28px 16px}
+  h1{margin:0 0 12px;font-size:22px}
+  p.sub{margin:0 0 18px;color:var(--muted);font-size:14px}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:18px;padding:18px;box-shadow:0 8px 24px #0006}
+  .row{display:grid;gap:10px;grid-template-columns:1fr;margin-bottom:12px}
+  label{font-size:13px;color:var(--muted)}
+  input[type="text"]{
+    width:100%;padding:12px;border-radius:10px;border:1px solid var(--border);
+    background:#0f172a;color:#fff;font-size:15px;
+  }
+  .btns{display:flex;gap:8px}
+  button{
+    padding:12px 14px;border:none;border-radius:10px;background:var(--accent);
+    color:#000;font-weight:700;cursor:pointer;font-size:15px
+  }
+  button.secondary{background:#0b1324;color:#cbd5e1;border:1px solid var(--border);font-weight:600}
+  button:hover{filter:brightness(.95)}
+  .panel{
+    margin-top:8px;border:1px dashed #2a364c;background:#0f1628;border-radius:12px;padding:14px;display:none
+  }
+  .panel h2{margin:0 0 8px;font-size:15px}
+  .hint{font-size:12px;color:#94a3b8;margin-top:4px}
+  .error{color:#fecaca;font-size:13px;margin-top:8px;display:none}
+  #status{min-height:24px;margin-top:10px}
+  .spinner{display:inline-block;width:18px;height:18px;border:2px solid #2a3b5f;border-top-color:#22d3ee;border-radius:50%;animation:spin 1s linear infinite;vertical-align:-3px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .report{
+    margin-top:18px;border:1px solid var(--border);border-radius:16px;overflow:hidden;background:#0b1324
+  }
+  .report-header{padding:10px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+  .report-header h3{margin:0;font-size:15px;color:#cbd5e1}
+  iframe#reportFrame{width:100%;height:70vh;border:0;display:none;background:#fff}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🔎 Bumi Customer Resource (BCR)</h1>
+    <p class="sub">Masukkan <strong>nama perusahaan</strong>. Jika bukan PT, setelah submit sistem akan meminta <em>Provinsi, Kota/Kab, dan Kecamatan</em>.</p>
+
+    <div class="card">
+      <form id="bcrForm" novalidate>
+        <div class="row">
+          <label for="company">Nama Perusahaan</label>
+          <input type="text" id="company" placeholder="Contoh: PT Bumi Teknik Utama / Bumi Teknik Utama" required>
+        </div>
+
+        <!-- Panel alamat: muncul HANYA setelah submit jika nama bukan PT -->
+        <div id="addrPanel" class="panel" aria-hidden="true">
+          <h2>📍 Lengkapi Alamat</h2>
+          <div class="row">
+            <label for="province">Provinsi</label>
+            <input type="text" id="province" placeholder="Contoh: DKI Jakarta">
+          </div>
+          <div class="row">
+            <label for="city">Kota/Kabupaten</label>
+            <input type="text" id="city" placeholder="Contoh: Kota Bandung / Kab. Bekasi">
+          </div>
+          <div class="row">
+            <label for="district">Kecamatan</label>
+            <input type="text" id="district" placeholder="Contoh: Kebon Jeruk">
+          </div>
+          <p class="hint">Karena nama bukan PT, mohon isi ketiganya lalu tekan Submit lagi.</p>
+          <p id="addrError" class="error">Lengkapi provinsi, kota/kabupaten, dan kecamatan.</p>
+        </div>
+
+        <div class="btns">
+          <button type="submit">Submit</button>
+          <button type="button" class="secondary" id="btnClear">Clear</button>
+        </div>
+        <p id="status"></p>
+      </form>
+    </div>
+
+    <div class="report" id="reportBox" style="display:none">
+      <div class="report-header">
+        <h3>Hasil Laporan</h3>
+        <button type="button" class="secondary" id="btnOpenNew">Buka di Tab Baru</button>
+      </div>
+      <iframe id="reportFrame" title="BCR Report"></iframe>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const WEBHOOK_URL = "https://bumiai.app.n8n.cloud/webhook/company-research";
+
+  const form = document.getElementById("bcrForm");
+  const statusEl = document.getElementById("status");
+  const addrPanel = document.getElementById("addrPanel");
+  const addrError = document.getElementById("addrError");
+  const reportBox = document.getElementById("reportBox");
+  const reportFrame = document.getElementById("reportFrame");
+  const btnOpenNew = document.getElementById("btnOpenNew");
+  const btnClear = document.getElementById("btnClear");
+
+  function isPT(name){
+    return /^\s*PT\b/i.test(name || "");
+  }
+  function showAddrPanel(){
+    addrPanel.style.display = "block";
+    addrPanel.setAttribute("aria-hidden","false");
+  }
+  function hideAddrPanel(){
+    addrPanel.style.display = "none";
+    addrPanel.setAttribute("aria-hidden","true");
+    addrError.style.display = "none";
+  }
+  function validateAddress(){
+    const province = document.getElementById("province").value.trim();
+    const city     = document.getElementById("city").value.trim();
+    const district = document.getElementById("district").value.trim();
+    const ok = !!(province && city && district);
+    addrError.style.display = ok ? "none" : "block";
+    return ok;
+  }
+  function setStatus(msg, loading=false){
+    statusEl.innerHTML = loading ? `<span class="spinner"></span> ${msg}` : msg;
+  }
+  function clearReport(){
+    reportFrame.removeAttribute("srcdoc");
+    reportFrame.style.display = "none";
+    reportBox.style.display = "none";
+  }
+
+  btnClear.onclick = () => {
+    form.reset();
+    hideAddrPanel();
+    setStatus("");
+    clearReport();
+    document.getElementById("company").focus();
+  };
+
+  btnOpenNew.onclick = () => {
+    const html = reportFrame.getAttribute("srcdoc") || "";
+    if (!html) return;
+    const blob = new Blob([html], {type:"text/html;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank","noopener");
+    setTimeout(()=>URL.revokeObjectURL(url), 30_000);
+  };
+
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    setStatus("Memproses permintaan...", true);
+
+    const company = document.getElementById("company").value.trim();
+
+    // CASE A: PT → langsung kirim
+    if (isPT(company)){
+      await sendPayload({ company });
+      return;
+    }
+
+    // CASE B: bukan PT → jika panel belum tampil, minta alamat dulu
+    const needAddr = addrPanel.getAttribute("aria-hidden") !== "false";
+    if (needAddr){
+      showAddrPanel();
+      setStatus("Nama bukan PT. Lengkapi alamat lalu Submit lagi.");
+      return;
+    }
+
+    // Panel sudah tampil → validasi
+    if (!validateAddress()){
+      setStatus("Lengkapi alamat terlebih dahulu.");
+      return;
+    }
+
+    const province = document.getElementById("province").value.trim();
+    const city     = document.getElementById("city").value.trim();
+    const district = document.getElementById("district").value.trim();
+    const location = [district, city, province].filter(Boolean).join(", ");
+
+    await sendPayload({ company, province, city, district, location });
+  };
+
+  async function sendPayload(payload){
+    clearReport();
+    try{
+      const res = await fetch(WEBHOOK_URL, {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(()=> ({}));
+
+      // Backend bisa memaksa minta alamat
+      if (data && data.need_address){
+        showAddrPanel();
+        setStatus(data.message || "Mohon lengkapi alamat.");
+        return;
+      }
+
+      // Jika ada URL file → arahkan
+      if (data && data.url){
+        window.open(data.url, "_blank","noopener");
+        setStatus("Laporan dibuka di tab baru.");
+        return;
+      }
+
+      // Jika ada HTML laporan → render di iframe (terisolasi)
+      if (data && data.html){
+        reportFrame.setAttribute("srcdoc", data.html);
+        reportFrame.style.display = "block";
+        reportBox.style.display = "block";
+        setStatus("✅ Laporan siap.");
+        // scroll ke hasil
+        reportBox.scrollIntoView({behavior:"smooth", block:"start"});
+        return;
+      }
+
+      // Fallback plain text / pesan
+      if (data && data.text_plain){
+        const html = `<pre style="white-space:pre-wrap;word-wrap:break-word;padding:14px">${escapeHtml(data.text_plain)}</pre>`;
+        reportFrame.setAttribute("srcdoc", html);
+        reportFrame.style.display = "block";
+        reportBox.style.display = "block";
+        setStatus("✅ Laporan siap (teks).");
+        return;
+      }
+
+      setStatus("✅ Permintaan terkirim. Menunggu hasil.");
+    }catch(err){
+      setStatus("❌ Gagal memproses permintaan.");
+    }
+  }
+
+  // util sederhana
+  function escapeHtml(s){
+    return String(s)
+      .replace(/&/g,"&amp;")
+      .replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;");
+  }
+})();
+</script>
+</body>
+</html>
